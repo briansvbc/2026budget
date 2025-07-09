@@ -1,0 +1,947 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2822
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fswiss\fcharset0 Helvetica;}
+{\colortbl;\red255\green255\blue255;}
+{\*\expandedcolortbl;;}
+\margl1440\margr1440\vieww11520\viewh8400\viewkind0
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+
+\f0\fs24 \cf0 <!DOCTYPE html>\
+<html lang="en">\
+<head>\
+    <meta charset="UTF-8">\
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">\
+    <title>SVBC 2026 Ministry Budget Planner</title>\
+    <script src="https://cdn.tailwindcss.com"></script>\
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>\
+    <!-- Firebase SDKs -->\
+    <script type="module">\
+        import \{ initializeApp \} from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";\
+        import \{ getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged \} from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";\
+        import \{ getFirestore, doc, getDoc, setDoc, collection, query, where, addDoc, getDocs \} from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";\
+\
+        // Global Firebase variables\
+        window.fbApp = null;\
+        window.db = null;\
+        window.auth = null;\
+        window.currentUserId = null; // This will hold the Firebase Auth UID\
+        window.currentMinistryLeaderName = null; // This will hold the user-entered name\
+        window.isAuthReady = false;\
+        window.appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';\
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : \{\};\
+\
+        async function initFirebase() \{\
+            try \{\
+                window.fbApp = initializeApp(firebaseConfig);\
+                window.db = getFirestore(window.fbApp);\
+                window.auth = getAuth(window.fbApp);\
+\
+                onAuthStateChanged(window.auth, async (user) => \{\
+                    if (user) \{\
+                        window.currentUserId = user.uid;\
+                        window.isAuthReady = true;\
+                        // Attempt to load the user's budget after auth, but don't show modal if it loads\
+                        await loadMyBudget();\
+                    \} else \{\
+                        // Sign in anonymously if no user is logged in\
+                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) \{\
+                            await signInWithCustomToken(window.auth, __initial_auth_token);\
+                        \} else \{\
+                            await signInAnonymously(window.auth);\
+                        \}\
+                    \}\
+                \});\
+            \} catch (error) \{\
+                showMessage('Error initializing Firebase: ' + error.message, 'error');\
+                console.error("Firebase initialization error:", error);\
+            \}\
+        \}\
+\
+        // Expose Firebase functions globally for use in HTML\
+        window.initFirebase = initFirebase;\
+        window.getFirestore = getFirestore;\
+        window.doc = doc;\
+        window.getDoc = getDoc;\
+        window.setDoc = setDoc;\
+        window.collection = collection;\
+        window.query = query;\
+        window.where = where;\
+        window.addDoc = addDoc;\
+        window.getDocs = getDocs;\
+    </script>\
+    <!-- Chosen Palette: Warm Harmony (Stone, Amber, Teal) -->\
+    <!-- Application Structure Plan: A task-oriented, multi-step "wizard" application guides ministry staff through the budget process. It begins with a strategic goals dashboard to ground them in the church's mission. The core is a dynamic form for adding and justifying individual budget line items, with interactive linking to goals. This is followed by a dedicated contingency planning module (+/- 20%) and a final, printable summary. This step-by-step structure breaks down a complex task into manageable parts, reduces cognitive load, and uses interactivity to ensure strategic alignment, making it a functional tool rather than a static document. Firebase integration allows saving/loading individual budgets and a pastor's view of all submitted budgets. -->\
+    <!-- Visualization & Content Choices: Report Info: Numerical church goals -> Goal: Inform/Motivate -> Viz: Chart.js Bar/Progress charts -> Interaction: Hover for details -> Justification: Provides an immediate, visual overview of strategic priorities. Report Info: Budget line item justification -> Goal: Organize/Justify -> Method: Dynamic HTML forms -> Interaction: Add/remove items, auto-calculating totals, multi-select for goal alignment -> Justification: Simplifies data entry and enforces strategic linking. Report Info: Contingency planning -> Goal: Compare/Plan -> Method: Interactive summary table with sliders/buttons -> Interaction: Dynamically adjust totals and flag items for reduction/increase -> Justification: Makes abstract contingency planning a concrete, interactive task. Firebase for data persistence and multi-user access. -->\
+    <!-- CONFIRMATION: NO SVG graphics used. NO Mermaid JS used. -->\
+    <style>\
+        body \{\
+            font-family: 'Inter', sans-serif;\
+        \}\
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');\
+        .step-inactive \{\
+            display: none;\
+        \}\
+        .step-active \{\
+            display: block;\
+        \}\
+        .goal-card \{\
+            transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out;\
+        \}\
+        .goal-card:hover \{\
+            transform: translateY(-5px);\
+            box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);\
+        \}\
+        @media print \{\
+            .no-print \{\
+                display: none !important;\
+            \}\
+            body, .printable-section \{\
+                margin: 0;\
+                padding: 0;\
+                box-shadow: none;\
+                border: none;\
+                background-color: white;\
+            \}\
+            .printable-section \{\
+                display: block !important;\
+            \}\
+            .page-break \{\
+                page-break-after: always;\
+            \}\
+        \}\
+        .chart-container \{\
+            position: relative;\
+            width: 100%;\
+            height: 250px;\
+            max-height: 250px;\
+        \}\
+        /* Custom Modal Styles */\
+        .modal \{\
+            display: none;\
+            position: fixed;\
+            z-index: 1000;\
+            left: 0;\
+            top: 0;\
+            width: 100%;\
+            height: 100%;\
+            overflow: auto;\
+            background-color: rgba(0,0,0,0.4);\
+            justify-content: center;\
+            align-items: center;\
+        \}\
+        .modal-content \{\
+            background-color: #fefefe;\
+            margin: auto;\
+            padding: 20px;\
+            border-radius: 8px;\
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);\
+            width: 90%;\
+            max-width: 400px;\
+            text-align: center;\
+        \}\
+        .modal-content.success \{ border-top: 5px solid #10B981; \} /* Green */\
+        .modal-content.error \{ border-top: 5px solid #EF4444; \} /* Red */\
+        .close-button \{\
+            color: #aaa;\
+            float: right;\
+            font-size: 28px;\
+            font-weight: bold;\
+        \}\
+        .close-button:hover,\
+        .close-button:focus \{\
+            color: black;\
+            text-decoration: none;\
+            cursor: pointer;\
+        \}\
+        .loading-overlay \{\
+            display: none;\
+            position: fixed;\
+            z-index: 1001;\
+            left: 0;\
+            top: 0;\
+            width: 100%;\
+            height: 100%;\
+            background-color: rgba(255,255,255,0.7);\
+            justify-content: center;\
+            align-items: center;\
+            flex-direction: column;\
+        \}\
+        .spinner \{\
+            border: 8px solid #f3f3f3;\
+            border-top: 8px solid #3498db;\
+            border-radius: 50%;\
+            width: 60px;\
+            height: 60px;\
+            animation: spin 2s linear infinite;\
+        \}\
+        @keyframes spin \{\
+            0% \{ transform: rotate(0deg); \}\
+            100% \{ transform: rotate(360deg); \}\
+        \}\
+    </style>\
+</head>\
+<body class="bg-stone-50 text-stone-800">\
+\
+    <div id="app-container" class="container mx-auto p-4 md:p-8 max-w-7xl">\
+        \
+        <header class="text-center mb-8 no-print">\
+            <h1 class="text-3xl md:text-4xl font-bold text-teal-800">Severns Valley Baptist Church</h1>\
+            <p class="text-xl text-stone-600 mt-2">2026 Ministry Budget Planning Worksheet</p>\
+            <!-- User ID display removed as per user request -->\
+        </header>\
+\
+        <!-- Step Navigation -->\
+        <nav class="flex justify-center space-x-2 md:space-x-4 mb-8 no-print">\
+            <button id="nav-step-1" class="px-4 py-2 rounded-md font-semibold bg-teal-600 text-white border border-teal-600" onclick="window.changeStep(1)">1. Goals</button>\
+            <button id="nav-step-2" class="px-4 py-2 rounded-md font-semibold bg-white text-teal-700 border border-teal-200" onclick="window.changeStep(2)">2. Setup</button>\
+            <button id="nav-step-3" class="px-4 py-2 rounded-md font-semibold bg-white text-teal-700 border border-teal-200" onclick="window.changeStep(3)">3. Line Items</button>\
+            <button id="nav-step-4" class="px-4 py-2 rounded-md font-semibold bg-white text-teal-700 border border-teal-200" onclick="window.changeStep(4)">4. Contingency</button>\
+            <button id="nav-step-5" class="px-4 py-2 rounded-md font-semibold bg-white text-teal-700 border border-teal-200" onclick="window.changeStep(5)">5. Summary</button>\
+        </nav>\
+\
+        <!-- Step 1: Goals Dashboard -->\
+        <section id="step-1" class="step-active printable-section">\
+            <div class="bg-white p-6 rounded-lg shadow-md mb-8">\
+                <h2 class="text-2xl font-bold text-teal-800 mb-4">Focus on the Mission: Our 2026 Goals</h2>\
+                <p class="text-stone-600 mb-6">Welcome! This worksheet is designed to help you build a budget that strategically fuels our church's mission. Before you begin, take a moment to review our primary goals for 2026. Every line item you propose should directly support one or more of these priorities. Let's align our resources with our vision.</p>\
+            </div>\
+            <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-6">\
+                <!-- Goal Cards will be dynamically inserted here -->\
+            </div>\
+             <div class="mt-8 text-right no-print">\
+                <button onclick="window.changeStep(2)" class="bg-teal-600 hover:bg-teal-700 text-white font-bold py-2 px-6 rounded-lg">Start Planning &rarr;</button>\
+            </div>\
+        </section>\
+\
+        <!-- Step 2: Ministry Setup -->\
+        <section id="step-2" class="step-inactive printable-section">\
+            <div class="bg-white p-6 rounded-lg shadow-md">\
+                 <h2 class="text-2xl font-bold text-teal-800 mb-4">Ministry Setup</h2>\
+                 <p class="text-stone-600 mb-6">First, let's get some basic information about your ministry area. This will help frame the context for your budget requests.</p>\
+                 <div class="space-y-4">\
+                     <div>\
+                        <label for="ministryName" class="block text-sm font-medium text-stone-700">Ministry Area/Department Name</label>\
+                        <input type="text" id="ministryName" class="mt-1 block w-full rounded-md border-stone-300 shadow-sm focus:border-teal-500 focus:ring-teal-500 sm:text-sm" placeholder="e.g., Youth Ministry">\
+                    </div>\
+                     <div>\
+                        <label for="ministryLeader" class="block text-sm font-medium text-stone-700">Your Name (Ministry Leader)</label>\
+                        <input type="text" id="ministryLeader" class="mt-1 block w-full rounded-md border-stone-300 shadow-sm focus:border-teal-500 focus:ring-teal-500 sm:text-sm" placeholder="e.g., John Doe">\
+                    </div>\
+                     <div>\
+                        <label for="ministryMission" class="block text-sm font-medium text-stone-700">Mission/Purpose of this Ministry</label>\
+                        <textarea id="ministryMission" rows="3" class="mt-1 block w-full rounded-md border-stone-300 shadow-sm focus:border-teal-500 focus:ring-teal-500 sm:text-sm" placeholder="Briefly describe your ministry's purpose."></textarea>\
+                    </div>\
+                 </div>\
+                 <div class="mt-8 flex justify-between no-print">\
+                    <button onclick="window.changeStep(1)" class="bg-stone-200 hover:bg-stone-300 text-stone-800 font-bold py-2 px-6 rounded-lg">&larr; Back to Goals</button>\
+                    <button onclick="window.changeStep(3)" class="bg-teal-600 hover:bg-teal-700 text-white font-bold py-2 px-6 rounded-lg">Add Line Items &rarr;</button>\
+                </div>\
+            </div>\
+        </section>\
+\
+        <!-- Step 3: Line Items -->\
+        <section id="step-3" class="step-inactive printable-section">\
+             <div class="bg-white p-6 rounded-lg shadow-md">\
+                 <h2 class="text-2xl font-bold text-teal-800 mb-2">Primary Budget Plan</h2>\
+                 <p class="text-stone-600 mb-4">This is the core of your budget proposal. For each anticipated expense, create a new line item. Be detailed in your justification and clearly link each expense back to the church's goals. This ensures every dollar has a purpose.</p>\
+                <div class="bg-amber-50 border-l-4 border-amber-400 text-amber-800 p-4 rounded-r-lg mb-6">\
+                    <div class="flex items-center">\
+                        <div class="py-1"><svg class="h-6 w-6 mr-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd" /></svg></div>\
+                        <div>\
+                            <p class="font-bold">Total Proposed Budget: <span id="totalBudget" class="text-xl">$0.00</span></p>\
+                        </div>\
+                    </div>\
+                </div>\
+\
+                <div id="line-items-container" class="space-y-6">\
+                    <!-- Line item forms will be dynamically inserted here -->\
+                </div>\
+\
+                <div class="mt-6 text-center no-print">\
+                    <button onclick="window.addLineItem()" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-6 rounded-lg">\
+                        + Add New Line Item\
+                    </button>\
+                </div>\
+                <div class="mt-8 flex justify-between no-print">\
+                    <button onclick="window.changeStep(2)" class="bg-stone-200 hover:bg-stone-300 text-stone-800 font-bold py-2 px-6 rounded-lg">&larr; Back to Setup</button>\
+                    <button onclick="window.changeStep(4)" class="bg-teal-600 hover:bg-teal-700 text-white font-bold py-2 px-6 rounded-lg">Plan Contingencies &rarr;</button>\
+                </div>\
+            </div>\
+        </section>\
+\
+        <!-- Step 4: Contingency Planning -->\
+        <section id="step-4" class="step-inactive printable-section">\
+            <div class="bg-white p-6 rounded-lg shadow-md">\
+                <h2 class="text-2xl font-bold text-teal-800 mb-2">Proactive Contingency Planning</h2>\
+                <p class="text-stone-600 mb-6">Good stewardship involves planning for different financial scenarios. Use this section to outline how your ministry would adapt to either a 20% budget reduction or a 20% budget increase. This demonstrates foresight and strategic flexibility.</p>\
+                \
+                <div class="grid md:grid-cols-2 gap-8">\
+                    <!-- Reduction Plan -->\
+                    <div class="bg-red-50 p-4 rounded-lg border border-red-200">\
+                        <h3 class="text-xl font-bold text-red-800">Scenario 1: 20% Budget Reduction</h3>\
+                        <p class="text-red-700 mt-2 mb-4">If the budget must be reduced, what would you cut or change? Prioritize protecting core mission activities.</p>\
+                        <p class="font-semibold text-red-800">Target Reduction: <span id="reductionTarget">$0.00</span></p>\
+                        <textarea id="reductionPlanRationale" rows="5" class="mt-2 block w-full rounded-md border-red-300 shadow-sm focus:border-red-500 focus:ring-red-500 sm:text-sm" placeholder="Explain the overall strategy for these reductions. Which line items would be cut or reduced, and what would be the impact on ministry outcomes?"></textarea>\
+                    </div>\
+\
+                    <!-- Increase Plan -->\
+                    <div class="bg-green-50 p-4 rounded-lg border border-green-200">\
+                        <h3 class="text-xl font-bold text-green-800">Scenario 2: 20% Budget Increase</h3>\
+                        <p class="text-green-700 mt-2 mb-4">If additional funds become available, how could you accelerate the mission? Think about expanding reach or deepening impact.</p>\
+                        <p class="font-semibold text-green-800">Potential Increase: <span id="increaseTarget">$0.00</span></p>\
+                        <textarea id="increasePlanRationale" rows="5" class="mt-2 block w-full rounded-md border-green-300 shadow-sm focus:border-green-500 focus:ring-green-500 sm:text-sm" placeholder="Describe how you would strategically invest these additional funds. What new initiatives could be launched, or which existing programs could be enhanced to achieve our goals faster?"></textarea>\
+                    </div>\
+                </div>\
+\
+                <div class="mt-8 flex justify-between no-print">\
+                    <button onclick="window.changeStep(3)" class="bg-stone-200 hover:bg-stone-300 text-stone-800 font-bold py-2 px-6 rounded-lg">&larr; Back to Line Items</button>\
+                    <button onclick="window.changeStep(5)" class="bg-teal-600 hover:bg-teal-700 text-white font-bold py-2 px-6 rounded-lg">Finalize & Review Summary &rarr;</button>\
+                </div>\
+            </div>\
+        </section>\
+\
+        <!-- Step 5: Summary -->\
+        <section id="step-5" class="step-inactive printable-section">\
+            <div class="bg-white p-6 rounded-lg shadow-md">\
+                <div class="flex justify-between items-start">\
+                    <div>\
+                        <h2 class="text-2xl font-bold text-teal-800 mb-2">2026 Budget Proposal Summary</h2>\
+                        <p class="text-stone-600 mb-6">Please review all the information you've entered. This summary is the final document for submission. You can print this page to create a physical copy for review and approval.</p>\
+                    </div>\
+                    <button onclick="window.print()" class="no-print bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg flex items-center">\
+                        <svg class="h-5 w-5 mr-2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5 2a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V4a2 2 0 00-2-2H5zm0 2h10v7H5V4zM4 14a1 1 0 011-1h10a1 1 0 110 2H5a1 1 0 01-1-1z" clip-rule="evenodd" /></svg>\
+                        Print\
+                    </button>\
+                </div>\
+\
+                <!-- Ministry Info Summary -->\
+                <div id="summary-ministry-info" class="mb-8 p-4 border rounded-lg"></div>\
+\
+                <div class="page-break"></div>\
+\
+                <!-- Primary Plan Summary -->\
+                <h3 class="text-xl font-bold text-teal-800 mt-8 mb-4">Primary Budget Plan</h3>\
+                <div id="summary-line-items" class="space-y-4"></div>\
+                <div class="text-right font-bold text-xl mt-4 p-4 bg-amber-100 rounded-lg">\
+                    Total Proposed Budget: <span id="summary-total"></span>\
+                </div>\
+                <div class="mt-4 p-4 border-t border-b border-stone-300">\
+                    <p class="font-bold">Annual Budget Amount Available (Pastor's Note):</p>\
+                    <div class="h-20 border border-dashed border-stone-400 rounded-lg mt-2 bg-stone-50"></div>\
+                </div>\
+\
+                <div class="page-break"></div>\
+\
+                <!-- Contingency Plan Summary -->\
+                <h3 class="text-xl font-bold text-teal-800 mt-8 mb-4">Contingency Plans</h3>\
+                <div class="grid md:grid-cols-2 gap-8">\
+                    <div id="summary-reduction-plan" class="p-4 border rounded-lg bg-red-50 border-red-200"></div>\
+                    <div id="summary-increase-plan" class="p-4 border rounded-lg bg-green-50 border-green-200"></div>\
+                </div>\
+\
+                <div class="page-break"></div>\
+\
+                <!-- All Submitted Budgets for Pastor's View -->\
+                <div id="all-budgets-view" class="mt-8 p-6 border rounded-lg bg-stone-100">\
+                    <h3 class="text-2xl font-bold text-teal-800 mb-4">All Submitted Budgets (Pastor's View)</h3>\
+                    <p class="text-stone-600 mb-4">Here you can see all budget proposals submitted by various ministry staff members. Click "View Details" to load a specific budget into the planner.</p>\
+                    <div id="submitted-budgets-list" class="space-y-4">\
+                        <p class="text-stone-500">Loading submitted budgets...</p>\
+                    </div>\
+                </div>\
+\
+\
+                <div class="mt-8 flex justify-between no-print">\
+                    <button onclick="window.changeStep(4)" class="bg-stone-200 hover:bg-stone-300 text-stone-800 font-bold py-2 px-6 rounded-lg">&larr; Back to Contingency</button>\
+                    <button onclick="window.saveBudget()" class="bg-teal-600 hover:bg-teal-700 text-white font-bold py-2 px-6 rounded-lg">Save My Budget</button>\
+                </div>\
+            </div>\
+        </section>\
+\
+    </div>\
+\
+    <!-- Custom Modal for Messages -->\
+    <div id="messageModal" class="modal">\
+        <div class="modal-content">\
+            <span class="close-button" onclick="window.closeMessageModal()">&times;</span>\
+            <p id="modalMessage" class="text-lg font-semibold"></p>\
+            <button onclick="window.closeMessageModal()" class="mt-4 px-4 py-2 bg-teal-600 text-white rounded-md hover:bg-teal-700">OK</button>\
+        </div>\
+    </div>\
+\
+    <!-- Name Input Modal -->\
+    <div id="nameInputModal" class="modal">\
+        <div class="modal-content">\
+            <h3 class="text-xl font-bold text-teal-800 mb-4">Welcome!</h3>\
+            <p class="text-stone-600 mb-4">Please enter your name (Ministry Leader) to load your previous budget or start a new one.</p>\
+            <input type="text" id="initialMinistryLeaderName" class="mt-1 block w-full rounded-md border-stone-300 shadow-sm focus:border-teal-500 focus:ring-teal-500 sm:text-sm p-2" placeholder="Your Name">\
+            <button onclick="window.submitInitialName()" class="mt-4 px-4 py-2 bg-teal-600 text-white rounded-md hover:bg-teal-700">Continue</button>\
+        </div>\
+    </div>\
+\
+    <!-- Loading Overlay -->\
+    <div id="loadingOverlay" class="loading-overlay">\
+        <div class="spinner"></div>\
+        <p class="mt-4 text-lg text-stone-700">Loading...</p>\
+    </div>\
+\
+    <script type="module">\
+        // Import Firestore functions from global window object\
+        const \{ getFirestore, doc, getDoc, setDoc, collection, query, where, addDoc, getDocs \} = window;\
+\
+        const goalsData = [\
+            \{ id: 1, title: "Membership Refresh", description: "Identifying who\'92s here, get an accurate membership list.", theme: "Love People", metric: "Qualitative", value: 0, target: 0, chartType: 'bar' \},\
+            \{ id: 2, title: "Hire a new Worship Pastor/Leader", description: "Fill this key leadership role.", theme: "Love People, Make Disciples", metric: "Qualitative", value: 0, target: 1, chartType: 'bar' \},\
+            \{ id: 3, title: "Increase Small Group Involvement by 25%", description: "Home Groups: 181 \uc0\u8594  226, Sunday Morning: 567 \u8594  709", theme: "Make Disciples", metric: "Participants", value: 748, target: 935, chartType: 'bar' \},\
+            \{ id: 4, title: "Increase Missions Involvement", description: "Sending teams, goal of 18 trips this year.", theme: "Make Disciples", metric: "Trips", value: 0, target: 18, chartType: 'bar' \},\
+            \{ id: 5, title: "Improve Inter-generational Engagement", description: "Foster connections across age groups.", theme: "Love People", metric: "Qualitative", value: 0, target: 0, chartType: 'bar' \},\
+            \{ id: 6, title: "Annual Calendar Planned", description: "Plan by Aug. to prepare for budget and new ministry year.", theme: "Love People", metric: "Qualitative", value: 0, target: 1, chartType: 'bar' \},\
+            \{ id: 7, title: "Increase Sunday Morning Attendance", description: "Grow from 841 to 950.", theme: "Make Disciples", metric: "Avg. Attendance", value: 841, target: 950, chartType: 'bar' \}\
+        ];\
+\
+        let lineItems = [];\
+        let lineItemCounter = 0;\
+        let currentBudgetDocId = null; // Stores the Firestore document ID for the currently loaded/saved budget\
+\
+        function showLoading() \{\
+            document.getElementById('loadingOverlay').style.display = 'flex';\
+        \}\
+\
+        function hideLoading() \{\
+            document.getElementById('loadingOverlay').style.display = 'none';\
+        \}\
+\
+        function showMessage(message, type = 'info') \{\
+            const modal = document.getElementById('messageModal');\
+            const modalContent = modal.querySelector('.modal-content');\
+            document.getElementById('modalMessage').textContent = message;\
+            modalContent.classList.remove('success', 'error');\
+            if (type === 'success') \{\
+                modalContent.classList.add('success');\
+            \} else if (type === 'error') \{\
+                modalContent.classList.add('error');\
+            \}\
+            modal.style.display = 'flex';\
+        \}\
+\
+        function closeMessageModal() \{\
+            document.getElementById('messageModal').style.display = 'none';\
+        \}\
+        // Expose closeMessageModal to the window object\
+        window.closeMessageModal = closeMessageModal;\
+\
+\
+        async function initializeApp() \{\
+            showLoading();\
+            await window.initFirebase(); // This will sign in anonymously and set window.currentUserId\
+\
+            // Wait for isAuthReady to be true before proceeding\
+            const checkAuthReady = setInterval(() => \{\
+                if (window.isAuthReady) \{\
+                    clearInterval(checkAuthReady);\
+                    hideLoading();\
+                    // Show the name input modal if no ministry leader name is set yet\
+                    // This happens if it's a new user or if their saved budget didn't have a name\
+                    if (!window.currentMinistryLeaderName) \{\
+                        document.getElementById('nameInputModal').style.display = 'flex';\
+                    \} else \{\
+                        // If name is already set (e.g., from loaded budget), proceed\
+                        renderGoalCards();\
+                        updateTotals();\
+                    \}\
+                \}\
+            \}, 100); // Check every 100ms\
+        \}\
+\
+        function submitInitialName() \{\
+            const nameInput = document.getElementById('initialMinistryLeaderName');\
+            const name = nameInput.value.trim();\
+            if (name) \{\
+                window.currentMinistryLeaderName = name;\
+                document.getElementById('ministryLeader').value = name; // Populate the form field\
+                document.getElementById('nameInputModal').style.display = 'none';\
+                renderGoalCards();\
+                addLineItem(); // Ensure at least one line item is present if starting fresh\
+                updateTotals();\
+                // No need to call loadMyBudget here, it's called after auth in initFirebase\
+            \} else \{\
+                showMessage('Please enter your name to continue.', 'error');\
+            \}\
+        \}\
+\
+        function renderGoalCards() \{\
+            const container = document.getElementById('step-1').querySelector('.grid');\
+            container.innerHTML = '';\
+            goalsData.forEach(goal => \{\
+                const card = document.createElement('div');\
+                card.className = 'goal-card bg-white p-6 rounded-lg shadow-md';\
+                \
+                let chartHtml = '';\
+                if(goal.metric !== 'Qualitative') \{\
+                    chartHtml = `<div class="chart-container mb-4"><canvas id="chart-$\{goal.id\}"></canvas></div>`;\
+                \}\
+\
+                card.innerHTML = `\
+                    <h3 class="text-lg font-bold text-teal-800">$\{goal.title\}</h3>\
+                    <p class="text-sm font-semibold text-teal-600 mb-2">$\{goal.theme\}</p>\
+                    <p class="text-stone-600 text-sm mb-4">$\{goal.description\}</p>\
+                    $\{chartHtml\}\
+                `;\
+                container.appendChild(card);\
+            \});\
+            createGoalCharts();\
+        \}\
+\
+        function createGoalCharts() \{\
+            goalsData.forEach(goal => \{\
+                if(goal.metric !== 'Qualitative') \{\
+                    const ctx = document.getElementById(`chart-$\{goal.id\}`).getContext('2d');\
+                    new Chart(ctx, \{\
+                        type: goal.chartType,\
+                        data: \{\
+                            labels: [goal.metric],\
+                            datasets: [\{\
+                                label: 'Current',\
+                                data: [goal.value],\
+                                backgroundColor: 'rgba(20, 184, 166, 0.6)',\
+                                borderColor: 'rgba(13, 148, 136, 1)',\
+                                borderWidth: 1,\
+                                barPercentage: 0.5\
+                            \}, \{\
+                                label: 'Goal',\
+                                data: [goal.target],\
+                                backgroundColor: 'rgba(241, 245, 249, 0.6)',\
+                                borderColor: 'rgba(100, 116, 139, 1)',\
+                                borderWidth: 1,\
+                                barPercentage: 0.5\
+                            \}]\
+                        \},\
+                        options: \{\
+                            responsive: true,\
+                            maintainAspectRatio: false,\
+                            indexAxis: 'y',\
+                            scales: \{\
+                                x: \{ beginAtZero: true, max: goal.target * 1.1 \},\
+                                y: \{ grid: \{ display: false \} \}\
+                            \},\
+                            plugins: \{\
+                                legend: \{ display: true, position: 'bottom' \},\
+                                tooltip: \{\
+                                    callbacks: \{\
+                                        label: function(context) \{\
+                                            return `$\{context.dataset.label\}: $\{context.raw\}`;\
+                                        \}\
+                                    \}\
+                                \}\
+                            \}\
+                        \}\
+                    \});\
+                \}\
+            \});\
+        \}\
+        \
+        function changeStep(stepNumber) \{\
+            document.querySelectorAll('section[id^="step-"]').forEach(section => \{\
+                section.classList.remove('step-active');\
+                section.classList.add('step-inactive');\
+            \});\
+            document.getElementById(`step-$\{stepNumber\}`).classList.remove('step-inactive');\
+            document.getElementById(`step-$\{stepNumber\}`).classList.add('step-active');\
+\
+            document.querySelectorAll('nav button').forEach(button => \{\
+                button.classList.remove('bg-teal-600', 'text-white');\
+                button.classList.add('bg-white', 'text-teal-700');\
+            \});\
+            document.getElementById(`nav-step-$\{stepNumber\}`).classList.add('bg-teal-600', 'text-white');\
+            document.getElementById(`nav-step-$\{stepNumber\}`).classList.remove('bg-white', 'text-teal-700');\
+            \
+            if (stepNumber === 4) \{ // Update contingency targets\
+                updateTotals();\
+            \}\
+            if (stepNumber === 5) \{ // Update summary and load all budgets for pastor\
+                generateSummary();\
+                if (window.isAuthReady) \{\
+                    loadAllSubmittedBudgets(); // Only load all budgets if auth is ready\
+                \}\
+            \}\
+            window.scrollTo(0, 0);\
+        \}\
+        // Expose changeStep to the window object\
+        window.changeStep = changeStep;\
+\
+        function addLineItem() \{\
+            lineItemCounter++;\
+            const container = document.getElementById('line-items-container');\
+            const itemDiv = document.createElement('div');\
+            itemDiv.id = `line-item-$\{lineItemCounter\}`;\
+            itemDiv.className = 'p-4 border rounded-lg bg-stone-50 relative';\
+\
+            let goalsOptions = goalsData.map(g => `<option value="$\{g.id\}">$\{g.title\}</option>`).join('');\
+\
+            itemDiv.innerHTML = `\
+                <button onclick="window.removeLineItem($\{lineItemCounter\})" class="absolute top-2 right-2 text-red-500 hover:text-red-700 no-print">&times;</button>\
+                <div class="grid md:grid-cols-2 gap-4">\
+                    <div>\
+                        <label class="block text-sm font-medium text-stone-700">Budget Line Reference</label>\
+                        <input type="text" data-field="reference" class="mt-1 block w-full input" placeholder="e.g., YM-Camp-001">\
+                    </div>\
+                     <div>\
+                        <label class="block text-sm font-medium text-stone-700">Specific Item/Description</label>\
+                        <input type="text" data-field="description" class="mt-1 block w-full input" placeholder="e.g., Summer Camp Registration Fees">\
+                    </div>\
+                    <div>\
+                        <label class="block text-sm font-medium text-stone-700">Estimated Cost ($)</label>\
+                        <input type="number" data-field="cost" class="mt-1 block w-full input cost-input" placeholder="e.g., 6250" oninput="window.updateTotals()">\
+                    </div>\
+                    <div>\
+                        <label class="block text-sm font-medium text-stone-700">Quantity/Basis of Calculation</label>\
+                        <input type="text" data-field="basis" class="mt-1 block w-full input" placeholder="e.g., 25 youth x $250/youth">\
+                    </div>\
+                     <div class="md:col-span-2">\
+                        <label class="block text-sm font-medium text-stone-700">Primary Church Goal(s) Supported</label>\
+                        <select data-field="goals" multiple class="mt-1 block w-full rounded-md border-stone-300 shadow-sm focus:border-teal-500 focus:ring-teal-500 sm:text-sm h-32">$\{goalsOptions\}</select>\
+                    </div>\
+                    <div class="md:col-span-2">\
+                        <label class="block text-sm font-medium text-stone-700">Rationale/Expected Impact</label>\
+                        <textarea data-field="rationale" rows="3" class="mt-1 block w-full input" placeholder="Explain why this is necessary and what impact it will have."></textarea>\
+                    </div>\
+                </div>\
+            `;\
+            // Helper to add styles to inputs\
+            itemDiv.querySelectorAll('.input').forEach(el => \{\
+                el.classList.add('rounded-md', 'border-stone-300', 'shadow-sm', 'focus:border-teal-500', 'focus:ring-teal-500', 'sm:text-sm');\
+            \});\
+            container.appendChild(itemDiv);\
+            updateTotals();\
+        \}\
+        // Expose addLineItem to the window object\
+        window.addLineItem = addLineItem;\
+\
+        function removeLineItem(id) \{\
+            document.getElementById(`line-item-$\{id\}`).remove();\
+            updateTotals();\
+        \}\
+        // Expose removeLineItem to the window object\
+        window.removeLineItem = removeLineItem;\
+\
+        function collectLineItemData() \{\
+            const items = [];\
+            document.querySelectorAll('#line-items-container > div').forEach(itemDiv => \{\
+                const itemData = \{ id: itemDiv.id \};\
+                itemDiv.querySelectorAll('[data-field]').forEach(field => \{\
+                    if (field.tagName === 'SELECT' && field.multiple) \{\
+                        itemData[field.dataset.field] = Array.from(field.selectedOptions).map(option => option.value);\
+                    \} else \{\
+                        itemData[field.dataset.field] = field.value;\
+                    \}\
+                \});\
+                items.push(itemData);\
+            \});\
+            return items;\
+        \}\
+\
+        function updateTotals() \{\
+            lineItems = collectLineItemData();\
+            const total = lineItems.reduce((sum, item) => sum + (parseFloat(item.cost) || 0), 0);\
+            const formattedTotal = total.toLocaleString('en-US', \{ style: 'currency', currency: 'USD' \});\
+            \
+            document.getElementById('totalBudget').textContent = formattedTotal;\
+            document.getElementById('reductionTarget').textContent = (total * 0.20).toLocaleString('en-US', \{ style: 'currency', currency: 'USD' \});\
+            document.getElementById('increaseTarget').textContent = (total * 0.20).toLocaleString('en-US', \{ style: 'currency', currency: 'USD' \});\
+        \}\
+        // Expose updateTotals to the window object\
+        window.updateTotals = updateTotals;\
+        \
+        function generateSummary() \{\
+            updateTotals(); // Ensure data is current\
+\
+            // Ministry Info\
+            const ministryName = document.getElementById('ministryName').value;\
+            const ministryLeader = document.getElementById('ministryLeader').value; // This is now the user-entered name\
+            const ministryMission = document.getElementById('ministryMission').value;\
+            const ministryInfoContainer = document.getElementById('summary-ministry-info');\
+            ministryInfoContainer.innerHTML = `\
+                <h3 class="text-xl font-bold text-teal-800 mb-2">Ministry Overview</h3>\
+                <p><strong>Ministry Area:</strong> $\{ministryName || 'Not Provided'\}</p>\
+                <p><strong>Ministry Leader(s):</strong> $\{ministryLeader || 'Not Provided'\}</p>\
+                <p><strong>Ministry Mission:</strong> $\{ministryMission || 'Not Provided'\}</p>\
+            `;\
+\
+            // Line Items\
+            const lineItemsContainer = document.getElementById('summary-line-items');\
+            lineItemsContainer.innerHTML = '';\
+            if (lineItems.length === 0 || lineItems.every(item => !item.description && !item.cost)) \{\
+                lineItemsContainer.innerHTML = '<p>No line items added.</p>';\
+            \} else \{\
+                lineItems.forEach(item => \{\
+                    const cost = parseFloat(item.cost) || 0;\
+                    const selectedGoalIds = item.goals || [];\
+                    const goalTitles = selectedGoalIds.map(id => goalsData.find(g => g.id == id)?.title).join(', ');\
+\
+                    const itemHtml = `\
+                        <div class="p-4 border rounded-lg">\
+                            <div class="flex justify-between items-start">\
+                                <h4 class="font-bold text-lg text-teal-700">$\{item.description || 'No Description'\}</h4>\
+                                <p class="font-bold text-lg">$\{cost.toLocaleString('en-US', \{ style: 'currency', currency: 'USD' \})\}</p>\
+                            </div>\
+                            <p class="text-sm text-stone-500 mb-2"><strong>Reference:</strong> $\{item.reference || 'N/A'\}</p>\
+                            <p class="text-sm"><strong>Basis of Calculation:</strong> $\{item.basis || 'N/A'\}</p>\
+                            <p class="text-sm mt-2"><strong>Rationale:</strong> $\{item.rationale || 'N/A'\}</p>\
+                            <p class="text-sm mt-2 font-semibold"><strong>Goals Supported:</strong> $\{goalTitles || 'None'\}</p>\
+                        </div>\
+                    `;\
+                    lineItemsContainer.innerHTML += itemHtml;\
+                \});\
+            \}\
+\
+            const total = lineItems.reduce((sum, item) => sum + (parseFloat(item.cost) || 0), 0);\
+            document.getElementById('summary-total').textContent = total.toLocaleString('en-US', \{ style: 'currency', currency: 'USD' \});\
+\
+            // Contingency Plans\
+            const reductionRationale = document.getElementById('reductionPlanRationale').value;\
+            const increaseRationale = document.getElementById('increasePlanRationale').value;\
+            const reductionTarget = (total * 0.20).toLocaleString('en-US', \{ style: 'currency', currency: 'USD' \});\
+            const increaseTarget = (total * 0.20).toLocaleString('en-US', \{ style: 'currency', currency: 'USD' \});\
+\
+            document.getElementById('summary-reduction-plan').innerHTML = `\
+                <h4 class="font-bold text-xl text-red-800 mb-2">20% Reduction Plan</h4>\
+                <p class="font-semibold text-red-800 mb-2">Target Reduction: $\{reductionTarget\}</p>\
+                <p class="text-sm">$\{reductionRationale || 'No rationale provided.'\}</p>\
+            `;\
+            document.getElementById('summary-increase-plan').innerHTML = `\
+                <h4 class="font-bold text-xl text-green-800 mb-2">20% Increase Plan</h4>\
+                <p class="font-semibold text-green-800 mb-2">Potential Increase: $\{increaseTarget\}</p>\
+                <p class="text-sm">$\{increaseRationale || 'No rationale provided.'\}</p>\
+            `;\
+        \}\
+\
+        // Firebase Save Function\
+        async function saveBudget() \{\
+            if (!window.isAuthReady || !window.currentMinistryLeaderName) \{\
+                showMessage('Please ensure you have entered your name and Firebase is ready.', 'error');\
+                return;\
+            \}\
+            showLoading();\
+            try \{\
+                const ministryData = \{\
+                    firebaseUid: window.currentUserId, // Firebase Auth UID (internal)\
+                    ministryLeaderName: document.getElementById('ministryLeader').value, // User-entered name\
+                    ministryName: document.getElementById('ministryName').value,\
+                    ministryMission: document.getElementById('ministryMission').value,\
+                    lineItems: collectLineItemData(),\
+                    reductionPlanRationale: document.getElementById('reductionPlanRationale').value,\
+                    increasePlanRationale: document.getElementById('increasePlanRationale').value,\
+                    timestamp: new Date().toISOString()\
+                \};\
+\
+                const budgetsCollectionRef = collection(window.db, `artifacts/$\{window.appId\}/public/data/ministryBudgets`);\
+\
+                // Query by firebaseUid to find the user's unique budget\
+                const q = query(budgetsCollectionRef, where("firebaseUid", "==", window.currentUserId));\
+                const querySnapshot = await getDocs(q);\
+\
+                if (querySnapshot.empty) \{\
+                    // No existing budget for this Firebase UID, create a new one\
+                    const docRef = await addDoc(budgetsCollectionRef, ministryData);\
+                    currentBudgetDocId = docRef.id;\
+                    showMessage('Budget saved successfully!', 'success');\
+                \} else \{\
+                    // User has an existing budget, update the first one found (should only be one per firebaseUid)\
+                    const docToUpdate = querySnapshot.docs[0];\
+                    currentBudgetDocId = docToUpdate.id;\
+                    await setDoc(doc(window.db, `artifacts/$\{window.appId\}/public/data/ministryBudgets`, currentBudgetDocId), ministryData);\
+                    showMessage('Budget updated successfully!', 'success');\
+                \}\
+            \} catch (e) \{\
+                console.error("Error saving document: ", e);\
+                showMessage('Error saving budget: ' + e.message, 'error');\
+            \} finally \{\
+                hideLoading();\
+            \}\
+        \}\
+\
+        // Firebase Load Function (for current user)\
+        async function loadMyBudget() \{\
+            if (!window.isAuthReady) \{\
+                // Don't show error immediately, as this is called during auth init\
+                console.log('Firebase not ready. Deferring loadMyBudget.');\
+                return;\
+            \}\
+            showLoading();\
+            try \{\
+                const budgetsCollectionRef = collection(window.db, `artifacts/$\{window.appId\}/public/data/ministryBudgets`);\
+                // Query by firebaseUid to load the current user's budget\
+                const q = query(budgetsCollectionRef, where("firebaseUid", "==", window.currentUserId));\
+                const querySnapshot = await getDocs(q);\
+\
+                if (!querySnapshot.empty) \{\
+                    // Load the most recent budget for the current user\
+                    const latestBudgetDoc = querySnapshot.docs.sort((a, b) => \{\
+                        const dateA = new Date(a.data().timestamp);\
+                        const dateB = new Date(b.data().timestamp);\
+                        return dateB - dateA; // Sort descending\
+                    \})[0];\
+\
+                    const data = latestBudgetDoc.data();\
+                    currentBudgetDocId = latestBudgetDoc.id;\
+                    populateForm(data);\
+                    window.currentMinistryLeaderName = data.ministryLeaderName || ''; // Set the name from loaded data\
+                    document.getElementById('initialMinistryLeaderName').value = window.currentMinistryLeaderName; // Pre-fill if modal is shown later\
+                    showMessage('Your budget loaded successfully!', 'success');\
+                \} else \{\
+                    // If no budget found for this Firebase UID, and name is already set, it's a new user\
+                    if (window.currentMinistryLeaderName) \{\
+                        showMessage('No saved budget found for your user ID. Start a new one!', 'info');\
+                        resetForm(); // Clear form if no budget found\
+                        document.getElementById('ministryLeader').value = window.currentMinistryLeaderName; // Keep the entered name\
+                    \} else \{\
+                        // If name not set, it means it's initial load, wait for user to input name\
+                        console.log('No budget found and name not set. Waiting for user input.');\
+                    \}\
+                \}\
+            \} catch (e) \{\
+                console.error("Error loading document: ", e);\
+                showMessage('Error loading budget: ' + e.message, 'error');\
+            \} finally \{\
+                hideLoading();\
+            \}\
+        \}\
+\
+        // Firebase Load Function (for any budget by ID)\
+        async function loadSpecificBudget(docId) \{\
+             if (!window.isAuthReady) \{\
+                showMessage('Firebase not ready. Cannot load budget.', 'error');\
+                return;\
+            \}\
+            showLoading();\
+            try \{\
+                const docRef = doc(window.db, `artifacts/$\{window.appId\}/public/data/ministryBudgets`, docId);\
+                const docSnap = await getDoc(docRef);\
+\
+                if (docSnap.exists()) \{\
+                    const data = docSnap.data();\
+                    currentBudgetDocId = docSnap.id;\
+                    populateForm(data);\
+                    window.currentMinistryLeaderName = data.ministryLeaderName || ''; // Set the name from loaded data\
+                    document.getElementById('initialMinistryLeaderName').value = window.currentMinistryLeaderName; // Pre-fill if modal is shown later\
+                    showMessage(`Budget for "$\{data.ministryName\}" by $\{data.ministryLeaderName\} loaded successfully!`, 'success');\
+                    changeStep(2); // Go to setup step to see loaded data\
+                \} else \{\
+                    showMessage('Budget not found.', 'error');\
+                \}\
+            \} catch (e) \{\
+                console.error("Error loading specific document: ", e);\
+                showMessage('Error loading budget: ' + e.message, 'error');\
+            \} finally \{\
+                hideLoading();\
+            \}\
+        \}\
+\
+        async function loadAllSubmittedBudgets() \{\
+            if (!window.isAuthReady) \{\
+                document.getElementById('submitted-budgets-list').innerHTML = '<p class="text-stone-500">Authentication not ready. Please wait...</p>';\
+                return;\
+            \}\
+            showLoading();\
+            try \{\
+                const budgetsCollectionRef = collection(window.db, `artifacts/$\{window.appId\}/public/data/ministryBudgets`);\
+                const querySnapshot = await getDocs(budgetsCollectionRef);\
+\
+                const listContainer = document.getElementById('submitted-budgets-list');\
+                listContainer.innerHTML = '';\
+\
+                if (querySnapshot.empty) \{\
+                    listContainer.innerHTML = '<p class="text-stone-500">No budgets have been submitted yet.</p>';\
+                \} else \{\
+                    querySnapshot.forEach(doc => \{\
+                        const data = doc.data();\
+                        const budgetItem = document.createElement('div');\
+                        budgetItem.className = 'p-3 border rounded-lg bg-white flex justify-between items-center shadow-sm';\
+                        budgetItem.innerHTML = `\
+                            <div>\
+                                <p class="font-bold text-teal-700">$\{data.ministryName || 'Unnamed Ministry'\}</p>\
+                                <p class="text-sm text-stone-600">Leader: $\{data.ministryLeaderName || 'N/A'\} (Firebase UID: $\{data.firebaseUid.substring(0, 8)\}...)</p>\
+                                <p class="text-xs text-stone-500">Last Saved: $\{new Date(data.timestamp).toLocaleString()\}</p>\
+                            </div>\
+                            <button onclick="window.loadSpecificBudget('$\{doc.id\}')" class="ml-4 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">View Details</button>\
+                        `;\
+                        listContainer.appendChild(budgetItem);\
+                    \});\
+                \}\
+            \} catch (e) \{\
+                console.error("Error loading all submitted budgets: ", e);\
+                listContainer.innerHTML = `<p class="text-red-600">Error loading submitted budgets: $\{e.message\}</p>`;\
+            \} finally \{\
+                hideLoading();\
+            \}\
+        \}\
+\
+\
+        function populateForm(data) \{\
+            document.getElementById('ministryName').value = data.ministryName || '';\
+            document.getElementById('ministryLeader').value = data.ministryLeaderName || ''; // Populate with the stored name\
+            document.getElementById('ministryMission').value = data.ministryMission || '';\
+            document.getElementById('reductionPlanRationale').value = data.reductionPlanRationale || '';\
+            document.getElementById('increasePlanRationale').value = data.increasePlanRationale || '';\
+\
+            const lineItemsContainer = document.getElementById('line-items-container');\
+            lineItemsContainer.innerHTML = ''; // Clear existing line items\
+            lineItems = []; // Reset local array\
+            lineItemCounter = 0; // Reset counter for new IDs\
+\
+            if (data.lineItems && data.lineItems.length > 0) \{\
+                data.lineItems.forEach(item => \{\
+                    addLineItem(); // This adds a new empty row and increments lineItemCounter\
+                    const currentItemDiv = document.getElementById(`line-item-$\{lineItemCounter\}`);\
+                    if (currentItemDiv) \{\
+                        currentItemDiv.querySelector('[data-field="reference"]').value = item.reference || '';\
+                        currentItemDiv.querySelector('[data-field="description"]').value = item.description || '';\
+                        currentItemDiv.querySelector('[data-field="cost"]').value = item.cost || '';\
+                        currentItemDiv.querySelector('[data-field="basis"]').value = item.basis || '';\
+                        currentItem.querySelector('[data-field="rationale"]').value = item.rationale || '';\
+                        \
+                        const goalsSelect = currentItemDiv.querySelector('[data-field="goals"]');\
+                        if (goalsSelect && item.goals) \{\
+                            Array.from(goalsSelect.options).forEach(option => \{\
+                                option.selected = item.goals.includes(option.value);\
+                            \});\
+                        \}\
+                    \}\
+                \});\
+            \} else \{\
+                addLineItem(); // Ensure at least one empty line item exists\
+            \}\
+            updateTotals();\
+        \}\
+\
+        function resetForm() \{\
+            document.getElementById('ministryName').value = '';\
+            document.getElementById('ministryLeader').value = window.currentMinistryLeaderName || ''; // Keep the entered name\
+            document.getElementById('ministryMission').value = '';\
+            document.getElementById('reductionPlanRationale').value = '';\
+            document.getElementById('increasePlanRationale').value = '';\
+            document.getElementById('line-items-container').innerHTML = '';\
+            lineItems = [];\
+            lineItemCounter = 0;\
+            currentBudgetDocId = null;\
+            addLineItem(); // Add one empty line item\
+            updateTotals();\
+        \}\
+\
+\
+        document.addEventListener('DOMContentLoaded', initializeApp);\
+\
+        // Add event listeners to nav buttons\
+        document.querySelectorAll('nav button[id^="nav-step-"]').forEach(button => \{\
+            const step = button.id.split('-')[2];\
+            button.addEventListener('click', () => changeStep(step));\
+        \});\
+\
+        // Expose functions globally for HTML calls\
+        window.submitInitialName = submitInitialName;\
+        window.saveBudget = saveBudget;\
+        window.loadMyBudget = loadMyBudget;\
+        window.loadSpecificBudget = loadSpecificBudget; // For pastor's view\
+    </script>\
+</body>\
+</html>\
+}
